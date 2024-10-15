@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
 import '../api_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
@@ -21,8 +20,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    loadMessages(); 
-    checkConnectivity(); 
+    loadMessages();
+    checkConnectivity();
   }
 
   // Función para verificar la conectividad de Internet
@@ -48,12 +47,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (storedMessages != null) {
       print('Messages loaded from SharedPreferences: $storedMessages');
 
-      // Convertir cada elemento a Map<String, String> explícitamente
       List<dynamic> decodedList = json.decode(storedMessages);
 
       setState(() {
         messages = decodedList.map((message) {
-          return Map<String, String>.from(message); // Conversión explícita
+          return Map<String, String>.from(message);
         }).toList();
         print('Messages after conversion: $messages');
       });
@@ -100,6 +98,7 @@ class _ChatScreenState extends State<ChatScreen> {
     String context = messages
         .map((message) => '${message['role']} : ${message['message']}')
         .join('\n');
+
     // Obtener la respuesta del chatbot
     String botResponse = await apiService.getResponse(context);
 
