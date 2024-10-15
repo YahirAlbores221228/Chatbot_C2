@@ -80,7 +80,7 @@ class HomeScreen extends StatelessWidget {
                 iconSize: 50,
                 padding: const EdgeInsets.all(10),
                 onPressed: () {
-                  launch("https://github.com/YahirAlbores221228/Api_vivero");
+                  launch("https://github.com/YahirAlbores221228/Chatbot_C2.git");
                 }),
           ],
         )),
