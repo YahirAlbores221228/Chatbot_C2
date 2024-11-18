@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -14,8 +16,13 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final ApiService apiService = ApiService();
   final TextEditingController _controller = TextEditingController();
+  final FlutterTts flutterTts = FlutterTts();
+  final stt.SpeechToText speechToText = stt.SpeechToText();
+
   List<Map<String, String>> messages = [];
   bool isConnected = true;
+  bool isListening = false;
+  bool isLoading = false;
 
   @override
   void initState() {
@@ -24,14 +31,13 @@ class _ChatScreenState extends State<ChatScreen> {
     checkConnectivity();
   }
 
-  // Función para verificar la conectividad de Internet
+  // Verifica conectividad de Internet
   void checkConnectivity() async {
     ConnectivityResult result = await Connectivity().checkConnectivity();
     setState(() {
       isConnected = result != ConnectivityResult.none;
     });
 
-    // Escuchar los cambios en la conectividad
     Connectivity().onConnectivityChanged.listen((ConnectivityResult result) {
       setState(() {
         isConnected = result != ConnectivityResult.none;
@@ -39,50 +45,81 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  // Función para cargar mensajes desde SharedPreferences
+  // Carga mensajes del historial
   Future<void> loadMessages() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     String? storedMessages = prefs.getString('chatHistory');
-
     if (storedMessages != null) {
-      print('Messages loaded from SharedPreferences: $storedMessages');
-
       List<dynamic> decodedList = json.decode(storedMessages);
-
       setState(() {
         messages = decodedList.map((message) {
           return Map<String, String>.from(message);
         }).toList();
-        print('Messages after conversion: $messages');
       });
-    } else {
-      print('No messages found in SharedPreferences');
     }
   }
 
   Future<void> clearMessages() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs
-        .remove('chatHistory'); // Eliminar la clave que guarda los mensajes
-
+    await prefs.remove('chatHistory');
+    //await speak('La conversación ha sido eliminada.');
+    await flutterTts.stop();
     setState(() {
-      messages.clear(); // Limpiar la lista de mensajes en la interfaz
+      messages.clear();
     });
+  }
 
-    print('Conversación eliminada');
+  @override
+  void dispose() {
+    flutterTts.stop();
+    super.dispose();
   }
 
   Future<void> saveMessages() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     String jsonMessages = json.encode(messages);
     await prefs.setString('chatHistory', jsonMessages);
-
-    print(
-        'Messages saved in SharedPreferences: $jsonMessages'); // Verificar si se está guardando correctamente
   }
 
-  // Función para enviar el mensaje del usuario
+  Future<void> speak(String text) async {
+    await flutterTts.setLanguage("es-ES");
+    await flutterTts.setPitch(1.0);
+    await flutterTts.speak(text);
+  }
+
+  // Reconocimiento de voz
+  Future<void> startListening() async {
+    bool available = await speechToText.initialize(
+      onStatus: (status) => print('Status: $status'),
+      onError: (error) => print('Error: $error'),
+    );
+
+    if (available) {
+      setState(() {
+        isListening = true;
+      });
+
+      speechToText.listen(
+        onResult: (result) {
+          setState(() {
+            _controller.text = result.recognizedWords;
+          });
+        },
+      );
+    }
+  }
+
+  void stopListening() {
+    speechToText.stop();
+    setState(() {
+      isListening = false;
+    });
+  }
+
   void sendMessage() async {
+    setState(() {
+      isLoading = true;
+    });
     if (_controller.text.isEmpty) return;
 
     String userMessage = _controller.text;
@@ -90,24 +127,34 @@ class _ChatScreenState extends State<ChatScreen> {
       messages.add({'role': 'user', 'message': userMessage});
     });
 
-    // Guardar mensaje del usuario en SharedPreferences
     await saveMessages();
     _controller.clear();
 
-    //le enviamos el historial completo
     String context = messages
-        .map((message) => '${message['role']} : ${message['message']}')
+        .map((message) => '${message['role']}: ${message['message']}')
         .join('\n');
 
-    // Obtener la respuesta del chatbot
-    String botResponse = await apiService.getResponse(context);
+    String prompt = '''
+Eres un asistente especializado en responder preguntas de forma breve y precisa.
+
+Contexto de la conversación:
+$context
+
+Pregunta del usuario:
+$userMessage
+
+Responde de manera breve, con un máximo de 2 o 3 oraciones.
+''';
+
+    String botResponse = await apiService.getResponse(prompt);
 
     setState(() {
+      isLoading = false;
       messages.add({'role': 'bot', 'message': botResponse});
     });
 
-    // Guardar respuesta del bot en SharedPreferences
     await saveMessages();
+    await speak(botResponse);
   }
 
   @override
@@ -141,28 +188,80 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
-              itemCount: messages.length,
+              itemCount: messages.length + (isLoading ? 1 : 0),
               itemBuilder: (context, index) {
+                if (index >= messages.length) {
+                  return const Row(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Icon(
+                          Icons.computer,
+                          color: Colors.blue,
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Flexible(
+                          child: Padding(
+                        padding: EdgeInsets.all(10),
+                        child: SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation(Colors.blue),
+                          ),
+                        ),
+                      )),
+                    ],
+                  );
+                }
+
                 final message = messages[index];
                 final isUserMessage = message['role'] == 'user';
 
-                return Align(
-                  alignment: isUserMessage
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Container(
-                    margin:
-                        const EdgeInsets.symmetric(vertical: 5, horizontal: 10),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: isUserMessage ? Colors.green : Colors.blue,
-                      borderRadius: BorderRadius.circular(10),
+                return Row(
+                  mainAxisAlignment: isUserMessage
+                      ? MainAxisAlignment.end
+                      : MainAxisAlignment.start,
+                  children: [
+                    if (!isUserMessage) ...[
+                      const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Icon(
+                          Icons.computer,
+                          color: Colors.blue,
+                        ),
+                      )
+                    ],
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(
+                            vertical: 5, horizontal: 10),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isUserMessage ? Colors.green : Colors.blue,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          message['message']!,
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
                     ),
-                    child: Text(
-                      message['message']!,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
+                    if (isUserMessage) ...[
+                      const SizedBox(width: 8),
+                      const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Icon(
+                          Icons.person,
+                          color: Colors.green,
+                        ),
+                      ),
+                    ],
+                  ],
                 );
               },
             ),
@@ -176,18 +275,25 @@ class _ChatScreenState extends State<ChatScreen> {
                     controller: _controller,
                     cursorColor: Colors.blue,
                     decoration: const InputDecoration(
-                      hintText: 'Escribe un mensaje...',
+                      hintText: 'Escribe un mensaje o usa el micrófono...',
                       hintStyle: TextStyle(fontWeight: FontWeight.w400),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.all(Radius.circular(10)),
                       ),
                       focusedBorder: OutlineInputBorder(
-                          borderSide: const BorderSide(
+                          borderSide: BorderSide(
                         color: Colors.blue,
                         width: 1.5,
                       )),
                     ),
                   ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    isListening ? Icons.mic : Icons.mic_none,
+                    color: Colors.blue,
+                  ),
+                  onPressed: isListening ? stopListening : startListening,
                 ),
                 IconButton(
                     icon: const Icon(Icons.send, color: Colors.blue),
